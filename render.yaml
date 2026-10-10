@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: v-ocr
+    runtime: docker
+    plan: standard
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MAX_SECONDS
+        value: "300"
+      - key: MAX_MB
+        value: "500"
