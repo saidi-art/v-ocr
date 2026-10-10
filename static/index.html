@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0d12"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="V-OCR"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>V-OCR - If you can scroll it, you can save it</title>
+<style>
+:root{--bg:#0b0d12;--card:#151923;--fg:#e8ecf4;--mut:#8b94a7;--acc:#7c5cff;--ok:#2ecc8f}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,system-ui,Segoe UI,Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 16px 60px}
+h1{font-size:2rem;margin:.2em 0 0}h1 span{color:var(--acc)}.tag{color:var(--mut);margin:.2em 0 1.2em}
+.card{background:var(--card);border-radius:16px;padding:20px;margin-bottom:16px}
+#drop{border:2px dashed #3a4258;border-radius:14px;padding:36px 16px;text-align:center;cursor:pointer}
+#drop.over{border-color:var(--acc)}#drop b{display:block;font-size:1.1rem}
+button{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:10px 16px;font-size:1rem;cursor:pointer}
+button.sec{background:#2a3144}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.bar{height:10px;background:#252b3b;border-radius:6px;overflow:hidden;margin:12px 0}.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+.hud{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}.hud div{background:#0f1320;border-radius:10px;padding:10px}.hud b{display:block;font-size:1.3rem}.hud small{color:var(--mut)}
+textarea{width:100%;min-height:340px;background:#0f1320;color:var(--fg);border:1px solid #2a3144;border-radius:10px;padding:12px;font:14px/1.5 ui-monospace,Menlo,monospace}
+.hide{display:none}.err{color:#ff6b6b}.fine{color:var(--mut);font-size:.85rem}
+</style></head><body><main>
+<h1>V-<span>OCR</span></h1><p class="tag">If you can scroll it, you can save it.</p>
+<div class="card" id="up">
+ <div id="drop"><b>Drop a screen recording here</b><span class="fine">or tap to choose (.mp4 .mov .webm)</span></div>
+ <input id="file" type="file" accept="video/*,.mp4,.mov,.webm" class="hide">
+ <p class="fine">Record your screen while scrolling a chat or doc from top to bottom (scroll steadily, not too fast). Videos are processed transiently and deleted right after. No account, nothing stored.</p>
+</div>
+<div class="card hide" id="prog">
+ <div id="stage">Uploading...</div><div class="bar"><i id="fill"></i></div>
+ <div class="hud"><div><b id="h1">-</b><small>Frames analyzed</small></div><div><b id="h2">-</b><small>Dedup rate</small></div><div><b id="h3">-</b><small>Chunks done</small></div></div>
+ <p class="err hide" id="err"></p><div class="row hide" id="retry"><button onclick="location.reload()">Try again</button></div>
+</div>
+<div class="card hide" id="res"><textarea id="txt" spellcheck="false"></textarea>
+ <div class="row"><button id="copy">Copy</button><button class="sec" id="dtxt">Download .txt</button><button class="sec" id="dmd">Download .md</button><button class="sec" onclick="location.reload()">New video</button></div></div>
+</main><script>
+const $=id=>document.getElementById(id),drop=$('drop'),file=$('file');
+drop.onclick=()=>file.click();
+['dragover','dragenter'].forEach(e=>drop.addEventListener(e,x=>{x.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,x=>{x.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',x=>{if(x.dataTransfer.files[0])go(x.dataTransfer.files[0])});
+file.onchange=()=>file.files[0]&&go(file.files[0]);
+function fail(m){$('err').textContent=m;$('err').classList.remove('hide');$('retry').classList.remove('hide')}
+const CH=4*1024*1024;
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+let wl=null;async function go(f){
+ try{if(navigator.wakeLock)wl=await navigator.wakeLock.request('screen')}catch(e){}
+ $('up').classList.add('hide');$('prog').classList.remove('hide');
+ try{
+  let fd=new FormData();fd.append('name',f.name||'video.mp4');fd.append('size',f.size);
+  let r=await fetch('/api/uploads',{method:'POST',body:fd});
+  if(!r.ok){let m='Upload failed';try{m=(await r.json()).detail}catch(_){}return fail(m)}
+  const uid=(await r.json()).id,total=Math.max(1,Math.ceil(f.size/CH));
+  for(let i=0;i<total;i++){
+   let ok=false,err='';
+   for(let t=0;t<90&&!ok;t++){
+    try{const rr=await fetch('/api/uploads/'+uid+'/'+i,{method:'PUT',body:f.slice(i*CH,(i+1)*CH)});
+     if(rr.ok)ok=true;else{err=rr.status;if(rr.status==404||rr.status==413){try{err=(await rr.json()).detail}catch(_){}return fail(err)}}}
+    catch(e){err='network'}
+    if(!ok){$('stage').textContent='Connection hiccup, connection to server lost, waiting ('+Math.round((t+1)*8/60*10)/10+' min). Keep this screen open...';await sleep(Math.min(2000*(t+1),10000))}
+   }
+   if(!ok)return fail('Upload failed ('+err+'). Check your connection and try again. Tip: open in Chrome/Safari, not inside another app.');
+   const pct=(i+1)/total;$('fill').style.width=(pct*30)+'%';$('stage').textContent='Uploading '+Math.round(pct*100)+'%';
+  }
+  r=await fetch('/api/uploads/'+uid+'/finish',{method:'POST'});
+  if(!r.ok){let m='Upload failed';try{m=(await r.json()).detail}catch(_){}return fail(m)}
+  poll((await r.json()).id);
+ }catch(e){fail('Upload failed (network). Try again, and open the link in Chrome/Safari rather than inside another app.')}
+}
+async function poll(id){
+ for(;;){
+  let j;try{j=await (await fetch('/api/jobs/'+id)).json()}catch(e){await new Promise(r=>setTimeout(r,1500));continue}
+  if(j.detail)return fail(j.detail);
+  $('stage').textContent=j.stage||j.status;
+  $('h1').textContent=j.frames_total??'-';$('h2').textContent=j.dedup_rate!=null?j.dedup_rate+'%':'-';
+  $('h3').textContent=j.chunks_total?j.chunks_done+'/'+j.chunks_total:'-';
+  let p=30;if(j.status=='dedup')p=45;if(j.status=='transcribing')p=55+(j.chunks_total?40*j.chunks_done/j.chunks_total:0);
+  if(j.status=='done')p=100;$('fill').style.width=p+'%';
+  if(j.status=='error')return fail(j.error);
+  if(j.status=='done'){$('res').classList.remove('hide');$('txt').value=j.text;return}
+  await new Promise(r=>setTimeout(r,1200));
+ }
+}
+$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('txt').value)}catch(e){$('txt').select();document.execCommand('copy')}$('copy').textContent='Copied!';setTimeout(()=>$('copy').textContent='Copy',1500)};
+function dl(n,t){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([$('txt').value],{type:t}));a.download=n;a.click()}
+$('dtxt').onclick=()=>dl('v-ocr.txt','text/plain');$('dmd').onclick=()=>dl('v-ocr.md','text/markdown');
+if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js');
+</script></body></html>
