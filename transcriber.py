@@ -2,7 +2,7 @@
 import base64, io, os, re, time
 import httpx
 
-MODELS = [m for m in os.environ.get("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-2.5-flash").split(",") if m]
+MODELS = [m for m in os.environ.get("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-3.8-flash").split(",") if m]
 CHUNK_IMAGES = int(os.environ.get("CHUNK_IMAGES", "5"))
 MAX_WIDTH = 900
 
@@ -29,9 +29,9 @@ def call_gemini(api_key, images, ctx):
     parts = [{"text": PROMPT.format(ctx=ctx_txt)}] + [
         {"inline_data": {"mime_type": "image/jpeg", "data": _jpeg(i)}} for i in images]
     body = {"contents": [{"parts": parts}], "generationConfig": {"temperature": 0}}
-    err = None
+    err = None; errs = []
     for model in MODELS:
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 r = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                                headers={"x-goog-api-key": api_key}, json=body, timeout=120)
@@ -44,12 +44,13 @@ def call_gemini(api_key, images, ctx):
                     return txt.strip(), u.get("totalTokenCount", 0), model
                 import logging; logging.getLogger('vocr').info("gemini fail %s", f"{model}: HTTP {r.status_code} {r.text[:300]}")
                 err = f"{model}: HTTP {r.status_code} {r.text[:200]}"
-                if r.status_code in (429, 500, 503):
-                    time.sleep(2 * (attempt + 1)); continue
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(3 * (attempt + 1)); continue
                 break  # 400/404 etc: try next model
             except Exception as e:
-                err = f"{model}: {e}"; time.sleep(2)
-    raise RuntimeError(err or "transcription failed")
+                err = f"{model}: {type(e).__name__} {str(e)[:150]}"; time.sleep(3)
+        errs.append(err)
+    raise RuntimeError(" | ".join(e for e in errs if e)[:600] or "transcription failed")
 
 
 def transcribe(strips, api_key, progress):
